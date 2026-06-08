@@ -124,6 +124,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="2026_wsp_FinalProject.cpp" />
+    <ClCompile Include="Handle.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Handle.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
