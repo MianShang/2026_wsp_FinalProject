@@ -132,10 +132,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="2026_wsp_FinalProject.cpp" />
+    <ClCompile Include="DirectoryCheck.cpp" />
     <ClCompile Include="Handle.cpp" />
     <ClCompile Include="input.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DirectoryCheck.h" />
     <ClInclude Include="Handle.h" />
     <ClInclude Include="input.h" />
   </ItemGroup>
