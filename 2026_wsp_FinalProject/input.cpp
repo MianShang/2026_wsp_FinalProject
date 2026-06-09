@@ -1,9 +1,6 @@
 ﻿// input.cpp
 #include "input.h"
 
-#include <iostream>
-#include <system_error>
-
 // [수정] 사용자가 경로를 따옴표로 감싸서 입력한 경우 따옴표를 제거합니다.
 std::string DirectoryInput::RemoveQuotes(const std::string& path)
 {
@@ -61,44 +58,56 @@ bool DirectoryInput::SelectDirectory()
 }
 
 // [수정] 선택된 디렉터리 안의 파일과 폴더 목록을 구분해서 출력합니다.
-void DirectoryInput::PrintDirectoryContents() const
+void DirectoryInput::PrintDirectoryContents(const std::string& targetFile, int colorCode) const
 {
     std::error_code errorCode;
     std::filesystem::directory_iterator iterator(selectedDirectory, errorCode);
 
-    if (errorCode)
-    {
-        std::cout << "오류: 디렉터리 내용을 읽을 수 없습니다.\n";
-        return;
-    }
+    if (errorCode) { std::cout << "오류: 디렉터리 내용을 읽을 수 없습니다.\n"; return; }
 
     std::cout << "디렉터리 내용:\n";
-
     bool isEmpty = true;
+
+    // 💡 핵심: 감지된 파일(targetFile)이 루트(selectedDirectory) 기준으로 어디에 있는지 계산
+    // 예: 루트가 D:\Project 이고 변경된게 D:\Project\Sub\test.txt 라면
+    // relative는 "Sub\test.txt"가 되고, 여기서 첫 번째 요소는 "Sub"가 됩니다.
+    std::filesystem::path root(selectedDirectory);
+    std::filesystem::path changedPath(targetFile); // 만약 targetFile이 전체 경로라면
+
+    // 상대 경로 계산 (상대 경로의 가장 첫 번째 항목이 현재 리스트에 보여지는 이름)
+    std::string targetHighlightName = "";
+    if (changedPath.is_absolute()) {
+        std::filesystem::path relative = changedPath.lexically_relative(root);
+        if (!relative.empty()) {
+            targetHighlightName = (*relative.begin()).string();
+        }
+    }
+    else {
+        // targetFile이 이미 파일명/상대경로라면 그대로 사용
+        targetHighlightName = changedPath.begin()->string();
+    }
 
     for (const auto& entry : iterator)
     {
         isEmpty = false;
-        std::string name = entry.path().filename().string();
+        std::string currentName = entry.path().filename().string();
 
-        if (entry.is_directory())
-        {
-            std::cout << "[폴더] " << name << "\n";
+        // 🌟 이제 리스트에 출력되는 이름(currentName)과 
+        // 변경된 파일이 속한 최상위 항목 이름(targetHighlightName)을 비교!
+        if (currentName == targetHighlightName) {
+            ConsoleColor::Set(colorCode);
         }
-        else if (entry.is_regular_file())
-        {
-            std::cout << "[파일] " << name << "\n";
+        else {
+            ConsoleColor::Set(ConsoleColor::DEFAULT);
         }
-        else
-        {
-            std::cout << "[기타] " << name << "\n";
-        }
+
+        if (entry.is_directory()) std::cout << "[폴더] " << currentName << "\n";
+        else std::cout << "[파일] " << currentName << "\n";
+
+        ConsoleColor::Set(ConsoleColor::DEFAULT);
     }
 
-    if (isEmpty)
-    {
-        std::cout << "디렉터리 안에 파일이나 폴더가 없습니다.\n";
-    }
+    if (isEmpty) { std::cout << "디렉터리 안에 파일이나 폴더가 없습니다.\n"; }
 }
 
 const std::filesystem::path& DirectoryInput::GetSelectedDirectory() const

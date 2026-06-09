@@ -9,8 +9,10 @@ Handle::Handle()
 // 멤버 변수인 HANDLE을 자동으로 해제하는 소멸자 선언.
 Handle::~Handle()
 {
-	// 여기도 중복 체크
-	CloseHandle(m_handle);
+	// 정상적인 핸들일 때만 닫도록 수정
+	if (isSetHandle()) {
+		CloseHandle(m_handle);
+	}
 }
 
 // 내부에서 핸들 값이 정상 값인지 확인하는 메서드
@@ -69,7 +71,9 @@ HANDLE Handle::getHandle()
 // 핸들을 닫고 초기화하는 메서드
 void Handle::closeHandle()
 {
-	// 중복 체크 필요
-	CloseHandle(m_handle);
-	m_handle = INVALID_HANDLE_VALUE;
+	// 정상적인 핸들일 때만 닫도록 수정
+	if (isSetHandle()) {
+		CloseHandle(m_handle);
+		m_handle = INVALID_HANDLE_VALUE;
+	}
 }
