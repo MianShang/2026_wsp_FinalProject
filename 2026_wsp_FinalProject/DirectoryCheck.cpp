@@ -1,107 +1,249 @@
-﻿#include "DirectoryCheck.h"
+#include "DirectoryCheck.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
-BOOL DirectoryCheck::directoryTrack(Handle& hDir, std::string& path, std::vector<FileChangeEvent>& outEvents)
+std::string DirectoryCheck::NormalizeRelativePath(const std::string& path)
 {
-	if (FALSE == hDir.isSetHandle())
-	{
-		ConsoleColor::Set(ConsoleColor::RED);
-		std::cout << "Handle Set Error : " << __FUNCTION__ << ", " << GetLastError() << "\n";
-		ConsoleColor::Set(ConsoleColor::DEFAULT);
-		return FALSE;
-	}
+    std::string normalized = path;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    return normalized;
+}
 
-	/// (화면 출력 로직을 제거하고 데이터 수집에 집중합니다)
-	BYTE bData[2048];
-	DWORD len;
+std::string DirectoryCheck::CurrentTime()
+{
+    const std::time_t now = std::time(nullptr);
+    std::tm localTime = {};
+    localtime_s(&localTime, &now);
 
-	if (FALSE == ReadDirectoryChangesW(
-		hDir.getHandle(),       /// 감시 디렉터리 핸들
-		bData,                  /// 정보가 남겨져 올 버퍼
-		sizeof(bData),          /// 버퍼의 크기 (안전성을 위해 sizeof 사용)
-		TRUE,                   /// 하위 디렉터리 검사 여부
-		flags,                  /// 검사 종류
-		&len,                   /// 사용한 버퍼의 길이
-		NULL,                   /// Overlapped 구조체 : 비동기
-		NULL                    /// APC 이름 : 비동기
-	))
-	{
-		ConsoleColor::Set(ConsoleColor::RED);
-		std::cout << "ReadDirectoryChangesW : " << GetLastError() << "\n";
-		ConsoleColor::Set(ConsoleColor::DEFAULT);
-		hDir.closeHandle();
-		return FALSE;
-	}
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+    return stream.str();
+}
 
-	/// 변경된 정보가 정상적으로 도착했다.
-	FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)bData;
+std::string DirectoryCheck::FileTimeToString(const std::filesystem::file_time_type& time)
+{
+    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    const std::time_t converted = std::chrono::system_clock::to_time_t(systemTime);
+    std::tm localTime = {};
+    localtime_s(&localTime, &converted);
 
-	while (TRUE)
-	{
-		/// 유니코드(WCHAR) 배열을 길이에 맞춰 wstring으로 변환 (글자 증발 방지)
-		std::wstring wFileName(event->FileName, event->FileNameLength / sizeof(WCHAR));
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+    return stream.str();
+}
 
-		/// 윈도우 API를 사용해 UTF-8 string으로 변환 (한글 깨짐 방지)
-		int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wFileName.c_str(), -1, NULL, 0, NULL, NULL);
-		std::string utf8FileName(sizeNeeded > 0 ? sizeNeeded - 1 : 0, 0);
-		if (sizeNeeded > 0) {
-			WideCharToMultiByte(CP_UTF8, 0, wFileName.c_str(), -1, &utf8FileName[0], sizeNeeded, NULL, NULL);
-		}
+FileState DirectoryCheck::ReadFileState(const std::filesystem::path& path)
+{
+    FileState state;
+    std::error_code errorCode;
 
-		if (utf8FileName.find("$RECYCLE.BIN") != std::string::npos ||
-			utf8FileName.find("System Volume Information") != std::string::npos) {
+    state.exists = std::filesystem::exists(path, errorCode);
+    if (errorCode || !state.exists)
+    {
+        return state;
+    }
 
-			if (0 == event->NextEntryOffset) break;
-			event = (FILE_NOTIFY_INFORMATION*)((PBYTE)event + event->NextEntryOffset);
-			continue; /// 아래의 출력 로직을 타지 않고 다음 이벤트로 진행
-		}
+    state.isDirectory = std::filesystem::is_directory(path, errorCode);
+    if (errorCode)
+    {
+        return state;
+    }
 
-		// 결과 전달을 위한 구조체 생성
-		FileChangeEvent change;
-		change.fileName = utf8FileName;
-		change.colorCode = ConsoleColor::DEFAULT;
+    if (!state.isDirectory)
+    {
+        state.size = std::filesystem::file_size(path, errorCode);
+        if (errorCode)
+        {
+            state.size = 0;
+            errorCode.clear();
+        }
+    }
 
+    const auto lastWrite = std::filesystem::last_write_time(path, errorCode);
+    if (!errorCode)
+    {
+        state.lastWriteTime = FileTimeToString(lastWrite);
+    }
 
-		int actionColor = ConsoleColor::DEFAULT;
+    return state;
+}
 
-		switch (event->Action)
-		{
-		case FILE_ACTION_ADDED:    /// 새로운 파일이 생성
-			change.actionStr = "[파일 추가] ";
-			change.colorCode = ConsoleColor::GREEN;
-			break;
+void DirectoryCheck::InitializeSnapshot(const std::filesystem::path& path)
+{
+    rootPath = path;
+    fileStates.clear();
 
-		case FILE_ACTION_MODIFIED: /// 존재하는 파일이 수정
-			change.actionStr = "[파일 수정] ";
-			change.colorCode = ConsoleColor::YELLOW;
-			break;
+    std::error_code errorCode;
+    std::filesystem::recursive_directory_iterator iterator(
+        rootPath,
+        std::filesystem::directory_options::skip_permission_denied,
+        errorCode);
+    const std::filesystem::recursive_directory_iterator end;
 
-		case FILE_ACTION_REMOVED:   /// 존재하는 파일이 삭제
-			change.actionStr = "[파일 삭제] ";
-			change.colorCode = ConsoleColor::RED;
-			break;
+    while (!errorCode && iterator != end)
+    {
+        const std::filesystem::path relative = iterator->path().lexically_relative(rootPath);
+        fileStates[NormalizeRelativePath(relative.generic_u8string())] = ReadFileState(iterator->path());
+        iterator.increment(errorCode);
+    }
+}
 
-			/// 파일 이름이 변경된 경우
-		case FILE_ACTION_RENAMED_NEW_NAME:  /// 새로운 파일 이름
-			change.actionStr = "[파일 새 이름] ";
-			change.colorCode = ConsoleColor::CYAN;
-			break;
+void DirectoryCheck::ProcessBuffer(DWORD length, std::vector<FileChangeEvent>& outEvents)
+{
+    if (length == 0)
+    {
+        return;
+    }
 
-		case FILE_ACTION_RENAMED_OLD_NAME:  /// 이전 파일 이름
-			change.actionStr = "[파일 예전 이름] ";
-			change.colorCode = ConsoleColor::CYAN;
-			break;
-		}
+    FILE_NOTIFY_INFORMATION* event = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buffer);
 
-		/// 감지된 이벤트를 vector에 추가하여 호출부로 전달
-		outEvents.push_back(change);
+    while (true)
+    {
+        const std::wstring wideName(event->FileName, event->FileNameLength / sizeof(WCHAR));
+        const int requiredSize = WideCharToMultiByte(
+            CP_UTF8, 0, wideName.c_str(), static_cast<int>(wideName.size()),
+            NULL, 0, NULL, NULL);
 
-		/// 무한 반복을 종료시키는 위치
-		if (0 == event->NextEntryOffset)
-			break;
-		/// NextEntryOffset이 0이 아니라는 의미 => 다음 데이터가 있다.
-		event = (FILE_NOTIFY_INFORMATION*)((PBYTE)event + event->NextEntryOffset);
-	}
+        std::string fileName(requiredSize, '\0');
+        if (requiredSize > 0)
+        {
+            WideCharToMultiByte(
+                CP_UTF8, 0, wideName.c_str(), static_cast<int>(wideName.size()),
+                fileName.data(), requiredSize, NULL, NULL);
+        }
 
-	return TRUE;
+        const std::string key = NormalizeRelativePath(fileName);
+
+        if (key.find("$RECYCLE.BIN") == std::string::npos &&
+            key.find("System Volume Information") == std::string::npos)
+        {
+            FileChangeEvent change;
+            change.timestamp = CurrentTime();
+            change.fileName = fileName;
+
+            const auto previous = fileStates.find(key);
+            if (previous != fileStates.end())
+            {
+                change.before = previous->second;
+            }
+
+            const std::filesystem::path fullPath = rootPath / std::filesystem::u8path(key);
+
+            switch (event->Action)
+            {
+            case FILE_ACTION_ADDED:
+                change.action = ChangeAction::Added;
+                change.actionStr = "[파일 추가] ";
+                change.colorCode = ConsoleColor::GREEN;
+                change.after = ReadFileState(fullPath);
+                fileStates[key] = change.after;
+                break;
+
+            case FILE_ACTION_MODIFIED:
+                change.action = ChangeAction::Modified;
+                change.actionStr = "[파일 수정] ";
+                change.colorCode = ConsoleColor::YELLOW;
+                change.after = ReadFileState(fullPath);
+                fileStates[key] = change.after;
+                break;
+
+            case FILE_ACTION_REMOVED:
+                change.action = ChangeAction::Removed;
+                change.actionStr = "[파일 삭제] ";
+                change.colorCode = ConsoleColor::RED;
+                fileStates.erase(key);
+                break;
+
+            case FILE_ACTION_RENAMED_OLD_NAME:
+                change.action = ChangeAction::RenamedOld;
+                change.actionStr = "[파일 예전 이름] ";
+                change.colorCode = ConsoleColor::CYAN;
+                renamedOldState = change.before;
+                hasRenamedOldState = true;
+                fileStates.erase(key);
+                break;
+
+            case FILE_ACTION_RENAMED_NEW_NAME:
+                change.action = ChangeAction::RenamedNew;
+                change.actionStr = "[파일 새 이름] ";
+                change.colorCode = ConsoleColor::CYAN;
+                if (hasRenamedOldState)
+                {
+                    change.before = renamedOldState;
+                    hasRenamedOldState = false;
+                }
+                change.after = ReadFileState(fullPath);
+                fileStates[key] = change.after;
+                break;
+
+            default:
+                change.actionStr = "[기타 변경]";
+                change.after = ReadFileState(fullPath);
+                break;
+            }
+
+            outEvents.push_back(change);
+        }
+
+        if (event->NextEntryOffset == 0)
+        {
+            break;
+        }
+
+        event = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(
+            reinterpret_cast<PBYTE>(event) + event->NextEntryOffset);
+    }
+}
+
+BOOL DirectoryCheck::directoryTrack(
+    Handle& hDir,
+    std::string& path,
+    std::vector<FileChangeEvent>& outEvents)
+{
+    if (FALSE == hDir.isSetHandle())
+    {
+        ConsoleColor::Set(ConsoleColor::RED);
+        std::cout << "Handle Set Error : " << __FUNCTION__ << ", " << GetLastError() << "\n";
+        ConsoleColor::Set(ConsoleColor::DEFAULT);
+        return FALSE;
+    }
+
+    BYTE buffer[2048] = {};
+    DWORD length = 0;
+    if (FALSE == ReadDirectoryChangesW(
+        hDir.getHandle(),
+        buffer,
+        sizeof(buffer),
+        TRUE,
+        flags,
+        &length,
+        NULL,
+        NULL))
+    {
+        if (GetLastError() == ERROR_OPERATION_ABORTED)
+        {
+            return FALSE;
+        }
+
+        ConsoleColor::Set(ConsoleColor::RED);
+        std::cout << "ReadDirectoryChangesW : " << GetLastError() << "\n";
+        ConsoleColor::Set(ConsoleColor::DEFAULT);
+        hDir.closeHandle();
+        return FALSE;
+    }
+
+    // 기존 인터페이스의 경로 인수를 유지합니다.
+    (void)path;
+
+    // 기존 방식과 동일하게 동기 호출로 변경 이벤트를 처리합니다.
+    // ProcessBuffer가 사용하는 멤버 버퍼로 결과를 복사합니다.
+    std::memcpy(this->buffer, buffer, length);
+    ProcessBuffer(length, outEvents);
+    return TRUE;
 }
