@@ -140,7 +140,6 @@
 | 06-09 | 임지섭 | `DirectoryCheck` · `ConsoleColor` 추가, 감시 코드 구현 |
 | 06-19 | 성윤우 | CSV 로그 기능 테스트 |
 | 06-21 | 성윤우 | fileCheck 기능 수정 (스냅샷 · 통계 · CSV 로그 · 감시 스레드) |
-| 11-10 | 임지섭 | feature 브랜치 전체 develop 병합 |
 
 <div align="center">
 
