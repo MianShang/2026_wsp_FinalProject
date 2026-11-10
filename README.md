@@ -88,7 +88,7 @@
 | 팀원 | 역할 | 담당 모듈 |
 |:---:|---|---|
 | **임지섭** | 프로젝트 구성 · 디렉터리 감시 · 통합 | `DirectoryCheck`, `ConsoleColor`, `main` |
-| **임성용** | 핸들 관리 | `Handle` |
+| **임성용** | 핸들 관리 (리소스 안전성) | `Handle` |
 | **성윤우** | 입력 처리 · 감지 고도화 · 로그 | `DirectoryInput`, `DirectoryCheck`, `main` |
 
 ### 🧑‍💻 임지섭
@@ -99,10 +99,25 @@
 - `handle_check` 브랜치 병합, 브랜치 간 충돌 해결 및 전체 병합 관리
 
 ### 🧑‍💻 임성용
-- `Handle` 클래스 구현 (Win32 `HANDLE` RAII 래퍼)
-  - 소멸자에서 핸들 자동 해제
-  - `=` 연산자 오버로딩으로 핸들 대입
-  - `isSetHandle()`, `getHandle()`, `closeHandle()` 제공
+- `Handle` 클래스 설계 및 구현 (`Handle.h`, `Handle.cpp`)
+  - Win32 `HANDLE`을 클래스로 감싸, 객체가 사라질 때 핸들이 자동으로 닫히도록 구성 (RAII)
+  - 핸들 누수와 잘못된 핸들 사용을 막는 공통 기반 제공
+- 잘못된 핸들 방지 로직
+  - 생성자와 `=` 연산자에서 `NULL`, `INVALID_HANDLE_VALUE`가 들어오면 저장하지 않도록 검사
+  - 기본 생성자에서 `INVALID_HANDLE_VALUE`로 초기화해 쓰레기 값 사용 방지
+- 핸들 관리용 메서드 제공
+
+  | 메서드 | 기능 |
+  |---|---|
+  | `operator=` | `hDir = CreateFileW(...)`처럼 대입만으로 핸들 등록 |
+  | `isSetHandle()` | 현재 유효한 핸들을 가지고 있는지 확인 |
+  | `getHandle()` | Win32 API 호출에 넘길 원본 핸들 반환 |
+  | `closeHandle()` | 핸들을 닫고 초기 상태로 되돌림 |
+
+- 프로그램에서의 활용
+  - `main`에서 감시 대상 디렉터리 핸들을 `Handle` 객체로 관리
+  - `DirectoryCheck::directoryTrack()`이 `isSetHandle()`로 핸들을 확인한 뒤 `getHandle()`로 `ReadDirectoryChangesW`에 전달
+  - 오류가 나면 `closeHandle()`로 핸들 정리
 
 ### 🧑‍💻 성윤우
 - `DirectoryInput` 클래스 구현
@@ -119,7 +134,7 @@
 | 날짜 | 작성자 | 내용 |
 |:---:|:---:|---|
 | 06-02 | 임지섭 | 저장소 생성 및 프로젝트 추가 |
-| 06-08 | 임성용 | `Handle` 클래스 추가 |
+| 06-08 | 임성용 | `Handle` 클래스 추가 (핸들 자동 해제 · 유효성 검사 · 대입 연산자 오버로딩) |
 | 06-08 | 성윤우 | input 파일 추가 및 프로젝트 설정 수정, input 기능 수정 |
 | 06-08 | 임지섭 | handle_check 브랜치 병합, 충돌 수정 및 프로젝트 설정 |
 | 06-09 | 임지섭 | `DirectoryCheck` · `ConsoleColor` 추가, 감시 코드 구현 |
